@@ -45,10 +45,10 @@ def print_stats(stats):
     print("Messages per second: %d (%f ms per message)"
           % (stats["msg_per_sec"], stats["ms_per_msg"]))
     if stats["test_complete"]:
-        for cid, dataset in stats["msg_missing"].items():
-            if len(dataset) > 0:
-                print("Messages missing for client %s: %s" % (cid, dataset))
-        print("Messages duplicated: %s" % stats["msg_duplicates"])
+        for cid, dataset in stats["per_client"].items():
+            print("Stats for client %s" % cid)
+            for key, count in dataset.items():
+                print("%s: %d" % (key, count))
     else:
         print("Test aborted, unable to gather duplicate/missing stats")
     print("Flight time mean:   %0.2f ms" % (stats["flight_time_mean"] * 1000))
@@ -73,7 +73,7 @@ def add_args(subparsers):
         "-H", "--host", default="localhost",
         help="MQTT host to connect to")
     parser.add_argument(
-        "-p", "--port", type=int, default=1883,
+        "-p", "--port", type=int, default=8883,
         help="Port for remote MQTT host")
     parser.add_argument(
         "-q", "--qos", type=int, choices=[0, 1, 2],
@@ -89,6 +89,15 @@ def add_args(subparsers):
         "-t", "--topic", default="mqtt-malaria/+/data/#",
         help="""Topic to subscribe to, will be sorted into clients by the
          '+' symbol""")
+    parser.add_argument(
+        "--ca_certs", type=str, default=None,
+        help="""CA Cert to use for TLS""")
+    parser.add_argument(
+        "--certfile", type=str, default=None,
+        help="""Cert File to use for TLS""")
+    parser.add_argument(
+        "--keyfile", type=str, default=None,
+        help="""Key File for TLS""")
     parser.add_argument(
         "--json", type=str, default=None,
         help="""Dump the collected stats into the given JSON file.""")

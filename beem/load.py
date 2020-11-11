@@ -60,14 +60,16 @@ class TrackingSender():
     """
     msg_statuses = {}
 
-    def __init__(self, host, port, cid):
+    def __init__(self, host, port, cid, opts):
         self.cid = cid
         self.log = logging.getLogger(__name__ + ":" + cid)
         self.mqttc = mqtt.Client(cid)
         self.mqttc.on_publish = self.publish_handler
         # TODO - you _probably_ want to tweak this
         if hasattr(self.mqttc, "max_inflight_messages_set"):
-            self.mqttc.max_inflight_messages_set(200)
+            self.mqttc.max_inflight_messages_set(1000)
+        if opts.ca_certs or opts.certfile or opts.keyfile:
+            self.mqttc.tls_set(opts.ca_certs, opts.certfile, opts.keyfile)
         rc = self.mqttc.connect(host, port, 60)
         if rc:
             raise Exception("Couldn't even connect! ouch! rc=%d" % rc)

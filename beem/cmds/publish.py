@@ -69,7 +69,7 @@ def _worker(options, proc_num, auth=None):
             cid = auth.split(":")[0]
     else:
         # FIXME - add auth support here too dummy!
-        ts = beem.load.TrackingSender(options.host, options.port, cid)
+        ts = beem.load.TrackingSender(options.host, options.port, cid, options)
 
     # Provide a custom generator
     #msg_gen = my_custom_msg_generator(options.msg_count)
@@ -146,6 +146,15 @@ def add_args(subparsers):
         help="""A file of psk 'identity:key' pairs, as you would pass to
 mosquitto's psk_file configuration option.  Each process will use a single
 line from the file.  Only as many processes will be made as there are keys""")
+    parser.add_argument(
+        "--ca_certs", type=str, default=None,
+        help="""CA Cert to use for TLS""")
+    parser.add_argument(
+        "--certfile", type=str, default=None,
+        help="""Cert File to use for TLS""")
+    parser.add_argument(
+        "--keyfile", type=str, default=None,
+        help="""Key File for TLS""")
     parser.add_argument(
         "--json", type=str, default=None,
         help="""Dump the collected stats into the given JSON file.""")

@@ -57,32 +57,54 @@ class TrackingListener():
         self.log = logging.getLogger(__name__ + ":" + self.cid)
         self.mqttc = mqtt.Client(self.cid)
         self.mqttc.on_message = self.msg_handler
+        self.mqttc.on_subscribe = self.subscribe_handler
+        #self.mqttc.on_log = self.log_handler
+        self.mqttc.on_disconnect = self.disconnect_handler
+        self.mqttc.on_connect = self.connect_handler
         self.listen_topic = opts.topic
         self.time_start = None
+        self.connected = False
         # TODO - you _probably_ want to tweak this
-        self.mqttc.max_inflight_messages_set(200)
+        if hasattr(self.mqttc, "max_inflight_messages_set"):
+            self.mqttc.max_inflight_messages_set(1000)
+        if opts.ca_certs or opts.certfile or opts.keyfile:
+            self.log.info("TLS %s %s %s", opts.ca_certs, opts.certfile, opts.keyfile)
+            self.mqttc.tls_set(opts.ca_certs, opts.certfile, opts.keyfile)
+        self.log.info("Host %s Port %s", host, port)
         rc = self.mqttc.connect(host, port, 60)
         if rc:
             raise Exception("Couldn't even connect! ouch! rc=%d" % rc)
-            # umm, how?
-        self.mqttc.subscribe('$SYS/broker/publish/messages/dropped', 0)
+        self.log.info("Connection established")
         self.drop_count = None
         self.dropping = False
         self.mqttc.loop_start()
+        time.sleep(4)
+
+    def subscribe_handler(self, client, userdata, mid, granted_qos):
+        self.log.info("subscribe handler: %d", mid)
+
+    def log_handler(self, client, userdata, level, buf):
+        self.log.info("%d: %s", level, buf)
+
+    def connect_handler(self, client, userdata, flags, rc):
+        self.connected = True
+
+    def disconnect_handler(self, client, userdata, rc):
+        self.log.info("disconnect handler: %d", rc)
 
     def msg_handler(self, mosq, userdata, msg):
         # WARNING: this _must_ release as quickly as possible!
         # get the sequence id from the topic
         #self.log.debug("heard a message on topic: %s", msg.topic)
-        if msg.topic == '$SYS/broker/publish/messages/dropped':
-            if self.drop_count:
-                self.log.warn("Drop count has increased by %d",
-                              int(msg.payload) - self.drop_count)
-                self.dropping = True
-            else:
-                self.drop_count = int(msg.payload)
-                self.log.debug("Initial drop count: %d", self.drop_count)
-            return
+        #if msg.topic == '$SYS/broker/publish/messages/dropped':
+        #    if self.drop_count:
+        #        self.log.warn("Drop count has increased by %d",
+        #                      int(msg.payload) - self.drop_count)
+        #        self.dropping = True
+        #    else:
+        #        self.drop_count = int(msg.payload)
+        #        self.log.debug("Initial drop count: %d", self.drop_count)
+        #    return
         if not self.time_start:
             self.time_start = time.time()
 
@@ -99,12 +121,19 @@ class TrackingListener():
         are set at creation time
 
         """
+
+        while not self.connected:
+            time.sleep(1)
+
         self.expected = self.options.msg_count * self.options.client_count
         self.log.info(
             "Listening for %d messages on topic %s (q%d)",
             self.expected, self.listen_topic, qos)
-        rc = self.mqttc.subscribe(self.listen_topic, qos)
-        #assert rc == 0, "Failed to subscribe?! this isn't handled!", rc
+        rc, mid = self.mqttc.subscribe(self.listen_topic, qos)
+        self.log.info("Subscribe returned %d %d", rc, mid)
+        if rc:
+            raise Exception("Couldn't even subscribe! ouch! rc=%d" % rc)
+
         while len(self.msg_statuses) < self.expected:
             # let the mosquitto thread fill us up
             time.sleep(1)
@@ -125,19 +154,25 @@ class TrackingListener():
 
         actual_clients = set([x.cid for x in self.msg_statuses])
         per_client_expected = range(1, self.options.msg_count + 1)
-        per_client_real = {}
-        per_client_missing = {}
+        per_client_stats = {}
         for cid in actual_clients:
-            per_client_real[cid] = [x.mid for x in self.msg_statuses if x.cid == cid]
-            per_client_missing[cid] = list(set(per_client_expected).difference(set(per_client_real[cid])))
+            per_client_real = [x.mid for x in self.msg_statuses if x.cid == cid]
+            per_client_duplicates = [x for x, y in collections.Counter(per_client_real).items() if y > 1]
+            per_client_real_mid = [x.mid for x in self.msg_statuses if x.cid == cid]
+            per_client_missing_mid = list(set(per_client_expected).difference(set(per_client_real_mid)))
+            per_client_stats[cid] = {
+                "actual_count": len(per_client_real),
+                "expected_count": len(per_client_expected),
+                "duplicate_count": len(per_client_duplicates),
+                "missing_count": len(per_client_missing_mid)
+            }
 
         return {
             "clientid": self.cid,
             "client_count": len(actual_clients),
             "test_complete": not self.dropping,
-            "msg_duplicates": [x for x, y in collections.Counter(self.msg_statuses).items() if y > 1],
-            "msg_missing": per_client_missing,
             "msg_count": msg_count,
+            "per_client": per_client_stats,
             "ms_per_msg": (self.time_end - self.time_start) / msg_count * 1000,
             "msg_per_sec": msg_count / (self.time_end - self.time_start),
             "time_total": self.time_end - self.time_start,
@@ -155,7 +190,7 @@ def static_file_attrs(content=None):
     else:
         size = 20
     return {
-            "file": dict(st_mode=(stat.S_IFREG | 0444), st_nlink=1,
+            "file": dict(st_mode=(stat.S_IFREG | 0o0444), st_nlink=1,
                             st_size=size,
                             st_ctime=now, st_mtime=now,
                             st_atime=now),
@@ -165,12 +200,12 @@ def static_file_attrs(content=None):
 
 class MalariaWatcherStatsFS(fuse.LoggingMixIn, fuse.Operations):
 
-    file_attrs = dict(st_mode=(stat.S_IFREG | 0444), st_nlink=1,
+    file_attrs = dict(st_mode=(stat.S_IFREG | 0o0444), st_nlink=1,
                             st_size=20000,
                             st_ctime=time.time(), st_mtime=time.time(),
                             st_atime=time.time())
 
-    dir_attrs = dict(st_mode=(stat.S_IFDIR | 0755),  st_nlink=2,
+    dir_attrs = dict(st_mode=(stat.S_IFDIR | 0o0755),  st_nlink=2,
                             st_ctime=time.time(), st_mtime=time.time(),
                             st_atime=time.time())
     README_STATFS = """
@@ -275,9 +310,9 @@ topics we are subscribed to.
             raise Exception("Couldn't even connect! ouch! rc=%d" % rc)
             # umm, how?
         # b/p/m for >= 1.2, b/m for 1.1.x
-        self.mqttc.subscribe('$SYS/broker/publish/messages/dropped', 0)
-        self.mqttc.subscribe('$SYS/broker/messages/dropped', 0)
-        self.mqttc.subscribe('$SYS/broker/messages/stored', 0)
+        #self.mqttc.subscribe('$SYS/broker/publish/messages/dropped', 0)
+        #self.mqttc.subscribe('$SYS/broker/messages/dropped', 0)
+        #self.mqttc.subscribe('$SYS/broker/messages/stored', 0)
         self.mqttc.loop_start()
         [self.mqttc.subscribe(t, self.options.qos) for t in self.listen_topics]
 

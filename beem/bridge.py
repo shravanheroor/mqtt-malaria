@@ -74,7 +74,7 @@ class BridgingSender():
             launched = False
             while not launched:
                 try:
-                    self.ts = beem.load.TrackingSender("localhost", mb.port, "ts_" + mb.label)
+                    self.ts = beem.load.TrackingSender("localhost", mb.port, "ts_" + mb.label, {})
                     launched = True
                 except:
                     # TrackingSender fails if it can't connect
@@ -96,7 +96,7 @@ class _ThreadedBridgeWorker(threading.Thread):
             launched = False
             while not launched:
                 try:
-                    ts = beem.load.TrackingSender("localhost", mb.port, "ts_" + mb.label)
+                    ts = beem.load.TrackingSender("localhost", mb.port, "ts_" + mb.label, self.options)
                     launched = True
                 except:
                     # TrackingSender fails if it can't connect
